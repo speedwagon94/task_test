@@ -1,38 +1,86 @@
-import asyncio
 import re
 
-from aiogram.types import ContentType
-from loguru import logger
-from aiogram import Bot, Dispatcher, executor, types
+from aiogram import Bot, Dispatcher, executor
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram import types
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-from aiogram.dispatcher.filters import IDFilter, RegexpCommandsFilter, Regexp
-import markups as btn
+
 from db import Database
-import config
+import markups as btn
+import gerchikov_test as btn1
+from gerchikov_test import question_max_answers, process_answers
 
 db = Database("1.db")
 
-# Если надо удалить таблицу
-# db.drop_table('bookmarks')
-db.create_table()
+db.create_table_gerchikov_results()
 db.create_table_bookmarks()
-TOKEN = config.TOKEN
-bot = Bot(token=TOKEN)
+db.create_table()
+bot = Bot(token="")
 dp = Dispatcher(bot, storage=MemoryStorage())
 pattern = r"^[-\w\.]+@([-\w]+\.)+[-\w]{2,4}$"
 
 
 class Fsm(StatesGroup):
     name = State()
+    position = State()
     email = State()
     mob_tel = State()
     user_naber = State()
+    gerchikov = State()
     add_key_start = State()
     add_key = State()
     get_key = State()
     rm_key = State()
+
+# Подсчет очков
+user_pr = 0
+user_pa = 0
+user_ho = 0
+user_lu = 0
+user_in = 0
+
+# Словаь для выбранных ответов
+selected_answers = {}
+
+
+async def ger_result(data, id):
+    """
+    Оценивает результаты теста Герчикова, определяет преобладающий тип личности и отправляет сообщение пользователю.
+    Также сохраняет результаты в базу данных.
+
+    Parameters:
+    - data (dict): Словарь с данными пользователя.
+    - id (int): Идентификатор чата пользователя.
+
+    Global Variables:
+    - user_pr (int): Текущий балл для черты личности 'pr' (точность).
+    - user_pa (int): Текущий балл для черты личности 'pa' (страсть).
+    - user_ho (int): Текущий балл для черты личности 'ho' (честность).
+    - user_lu (int): Текущий балл для черты личности 'lu' (лояльность).
+    - user_in (int): Текущий балл для черты личности 'in' (честность).
+
+    Returns:
+    - None
+    """
+    global user_pr, user_pa, user_ho, user_lu, user_in
+
+    variables = {
+        'Инструментальный тип (ИН)': user_in,
+        'Профессиональный тип (ПР)': user_pr,
+        'Патриотический тип (ПА)': user_pa,
+        'Хозяйский тип (ХО)': user_ho,
+        'Люмпенизированный (ЛЮ)': user_lu,
+    }
+
+    max_variable = max(variables, key=variables.get)
+
+    text = f"Количество баллов: ИН:{user_in}, ПР:{user_pr}, ПА:{user_pa}, ХО:{user_ho}, ЛЮ:{user_lu}\nВаш тип: {max_variable} {variables[max_variable]}"
+    await bot.send_message(id, text)
+
+    # Сохраняем результаты в базу данных
+    db.ger_post_result(id, data['name'], data['email'], data['mob_tel'], data['position'], user_in, user_pr, user_ho,
+                       user_lu, user_pa)
 
 
 async def result(data, id):
@@ -255,30 +303,49 @@ async def result(data, id):
     db.post_result(id, data['name'], data['email'], data['mob_tel'], user_nnnn, user_ie, user_sn, user_tf, user_jp, sum)
 
 
-####################################ОТМЕНА########################################
-@dp.message_handler(commands=['cancel'], state='*')
-async def cancel(message: types.Message, state: FSMContext):
-    await bot.send_message(message.from_user.id, "Выход.\n")
-    await state.finish()
-    return False
+@dp.message_handler(commands=['gerchikov'])
+async def gerchikov_handler(message: types.Message, state: FSMContext):
+    """
+    Обработчик команды /gerchikov. Инициирует процесс тестирования Герчикова.
 
-####################################СТАРТ########################################
-@dp.message_handler(commands=['start'])
-async def admin(message: types.Message, state: FSMContext):
-    await bot.send_message(message.chat.id, btn.start, parse_mode='html')
+    Parameters:
+    - message (types.Message): Объект сообщения пользователя.
+    - state (FSMContext): Объект для работы с машиной состояний.
+
+    Returns:
+    - None
+    """
+    await bot.send_message(message.chat.id, btn.name)
+    await Fsm.name.set()
+    # Устанавливает состояние флага. Чтобы в дальнейшем понять какой тест был выбран.
+    # Флаги используются для отслеживания состояния пользователя в ходе взаимодействия с ботом.
+    await state.update_data(is_gerchikov=True)
+    await state.update_data(is_test=False)
 
 
-####################################АВТОРИЗАЦИЯ########################################
 @dp.message_handler(commands=['test'])
 async def admin(message: types.Message, state: FSMContext):
+    """
+    Обработчик команды /test. Инициирует процесс обычного тестирования.
+
+    Parameters:
+    - message (types.Message): Объект сообщения пользователя.
+    - state (FSMContext): Объект для работы с машиной состояний.
+
+    Returns:
+    - None
+    """
     await bot.send_message(message.chat.id, btn.text1, parse_mode='html')
     await bot.send_message(message.chat.id, btn.name)
     await Fsm.name.set()
+    # Устанавливает состояние флага. Чтобы в дальнейшем понять какой тест был выбран.
+    # Флаги используются для отслеживания состояния пользователя в ходе взаимодействия с ботом.
+    await state.update_data(is_test=True)
+    await state.update_data(is_gerchikov=False)
 
 
 @dp.message_handler(state=Fsm.name)
 async def name(message: types.Message, state: FSMContext):
- 
     await state.update_data(name=message.text)
     await bot.send_message(message.from_user.id, btn.email)
     await Fsm.email.set()
@@ -286,34 +353,158 @@ async def name(message: types.Message, state: FSMContext):
 
 @dp.message_handler(state=Fsm.email)
 async def email(message: types.Message, state: FSMContext):
- 
     if not re.findall(pattern, message.text):
         await bot.send_message(message.from_user.id, "Неверный емэйл, попробуйте снова")
         return
     await state.update_data(email=message.text)
     await bot.send_message(message.from_user.id, btn.mob_tel)
-    await Fsm.next()
+    await Fsm.mob_tel.set()
     await state.update_data(state=1)
 
 
 @dp.message_handler(state=Fsm.mob_tel)
 async def mob_tel(message: types.Message, state: FSMContext):
- 
+    """
+    Обработчик ввода номера телефона.
+
+    Parameters:
+    - message (types.Message): Объект сообщения пользователя.
+    - state (FSMContext): Объект для работы с машиной состояний.
+
+    Returns:
+    - None
+    """
+    data = await state.get_data()
+    is_gerchikov = data.get('is_gerchikov', False)
+    is_test = data.get('is_test', False)
+
     try:
+        # Проверяем, что введенный текст - число и имеет длину 11 символов
         if len(message.text) == 11 and int(message.text):
             await state.update_data(mob_tel=message.text)
-            await bot.send_message(message.from_user.id, btn.ready)
-            await bot.send_message(message.from_user.id, btn.user_naber_1, reply_markup=btn.choice)
-            await Fsm.next()
-            await state.update_data(state=1)
+
+            # В зависимости от текущего состояния (тест Герчикова или обычный тест) переходим к следующему шагу
+            # Для этого мы устанавливали флаги, которые перенаправляют пользователя дальше
+            if is_gerchikov:
+                await bot.send_message(message.from_user.id, btn1.position)
+                await Fsm.position.set()
+                await state.update_data(state=1)
+            elif is_test:
+                await bot.send_message(message.from_user.id, btn.ready)
+                await bot.send_message(message.from_user.id, btn.user_naber_1, reply_markup=btn.choice)
+                await Fsm.user_naber.set()
+                await state.update_data(state=1)
             return
-    except:
+    except ValueError:
         pass
+
+    # Если введенный номер неверен, отправляем сообщение с просьбой ввести снова
     await bot.send_message(message.from_user.id, "Неверный номер, попробуйте снова")
     return
 
+# Должность
+@dp.message_handler(state=Fsm.position)
+async def position(message: types.Message, state: FSMContext):
+    await state.update_data(position=message.text)
+    await bot.send_message(message.from_user.id, btn1.q1, reply_markup=btn1.choice)
+    await Fsm.gerchikov.set()
 
-####################################КНОПКИ ОПРОСА########################################
+
+@dp.message_handler(commands=['cancel'], state='*')
+async def cancel(message: types.Message, state: FSMContext):
+    await bot.send_message(message.from_user.id, "Выход.\n")
+    await state.finish()
+    return False
+
+
+@dp.message_handler(commands=['start'])
+async def admin(message: types.Message, state: FSMContext):
+    await bot.send_message(message.chat.id, btn.start, parse_mode='html')
+
+
+@dp.callback_query_handler(state=Fsm.gerchikov)
+async def gerchikov(callback: types.CallbackQuery, state: FSMContext):
+    """
+    Обработчик ответов пользователя в ходе тестирования по методике Герчикова.
+
+    Parameters:
+    - callback (types.CallbackQuery): Объект коллбека с данными об ответе пользователя.
+    - state (FSMContext): Объект для работы с машиной состояний.
+
+    Returns:
+    - None
+    """
+    global user_pr, user_pa, user_ho, user_lu, user_in
+
+    # Отвечаем на коллбек, чтобы избежать повторного нажатия
+    await bot.answer_callback_query(callback_query_id=callback.id)
+
+    # Удаляем предыдущее сообщение с вопросом
+    await bot.delete_message(callback.from_user.id, callback.message.message_id)
+
+    # Получаем текущее состояние пользователя
+    state_user = await state.get_data()
+    state_user = state_user.get("state", 1)
+
+    # Формируем имя текущего вопроса
+    current_question = f"q{state_user}"
+
+    # Обработка ответа пользователя
+    if callback.data in ["1", "2", "3", "4", "5", "6"]:
+        max_answers = question_max_answers.get(current_question, 1)
+
+        if current_question not in selected_answers:
+            selected_answers[current_question] = {callback.data}
+        else:
+            if len(selected_answers[current_question]) < max_answers:
+                selected_answers[current_question].add(callback.data)
+            else:
+                # Ограничиваем количество выбранных ответов для текущего вопроса
+                await bot.send_message(callback.from_user.id,
+                                       f"Максимальное количество ответов для этого вопроса: {max_answers}. Выберите правильное количество ответов.")
+
+    # Обработка перехода к предыдущему вопросу
+    if callback.data == "⏮":
+        if state_user != 1:
+            state_user -= 1
+
+    # Обработка перехода к следующему вопросу
+    if "⏭" in callback.data:
+        if f"q{state_user}" in selected_answers:
+            answers_q = ",".join(selected_answers.get(f"q{state_user}", set()))
+            user_pr, user_pa, user_ho, user_lu, user_in = process_answers(f"q{state_user}", answers_q, user_pr, user_pa,
+                                                                          user_ho, user_lu, user_in)
+
+            print(
+                f"Для вопроса q{state_user} получены следующие значения: user_pr={user_pr}, user_pa={user_pa}, user_ho={user_ho}, user_lu={user_lu}, user_in={user_in}")
+
+            state_user += 1
+            if state_user == 24:
+                data = await state.get_data()
+                await ger_result(data, callback.from_user.id)
+                await state.finish()
+                return
+            await state.update_data(state=state_user)
+            txt = btn1.__dict__[f"q{state_user}"]
+            await bot.send_message(callback.from_user.id, txt, reply_markup=btn1.choice, parse_mode='html')
+        else:
+            await bot.send_message(callback.from_user.id,
+                                   "Пожалуйста, выберите хотя бы один ответ перед переходом к следующему вопросу.")
+    else:
+        txt = btn1.__dict__[f"q{state_user}"]
+        try:
+            already_answers = selected_answers.get(f"q{state_user}", set())
+            if already_answers:
+                txt += f'''
+<i>Ваши ответы: {', '.join(already_answers)}
+</i>
+'''
+        except:
+            pass
+        await bot.send_message(callback.from_user.id, txt, reply_markup=btn1.choice, parse_mode='html')
+
+
+
 @dp.callback_query_handler(state=Fsm.user_naber)
 async def user_naber(callback: types.CallbackQuery, state: FSMContext):
     await bot.answer_callback_query(callback_query_id=callback.id)
@@ -353,10 +544,8 @@ async def user_naber(callback: types.CallbackQuery, state: FSMContext):
     await bot.send_message(callback.from_user.id, txt, reply_markup=btn.choice, parse_mode='html')
 
     data = await state.get_data(state)
-    logger.info(data)
 
 
-####################################КЛЮЧИ########################################
 @dp.message_handler(commands=['listink13'], state="*")
 async def list_key(message: types.Message):
     res = db.list_key(message.from_user.id)
@@ -368,14 +557,16 @@ async def list_key(message: types.Message):
         keys += '`' + rows[0] + '`' + '\n'
     await bot.send_message(message.from_user.id, keys, parse_mode='markdown')
 
+
 @dp.message_handler(commands=['add'])
 async def add_key(message: types.Message, state: FSMContext):
     await bot.send_message(message.from_user.id, "Укажите название закладки, которую хотите добавить!")
     await Fsm.add_key_start.set()
 
+
 @dp.message_handler(state=Fsm.add_key_start)
 async def add_key(message: types.Message, state: FSMContext):
-    key=message.text
+    key = message.text
     if db.isMessageExists(key):
         await bot.send_message(message.from_user.id, "Такое название уже занято. Попробуйте другой!")
         return
@@ -384,7 +575,7 @@ async def add_key(message: types.Message, state: FSMContext):
     await Fsm.add_key.set()
 
 
-@dp.message_handler(state=Fsm.add_key, content_types=ContentType.ANY)
+@dp.message_handler(state=Fsm.add_key, content_types=types.ContentType.ANY)
 async def add_key2(message: types.Message, state: FSMContext):
     data = await state.get_data()
     if not db.add_key(message.from_user.id, data["key"], message.message_id):
@@ -399,6 +590,7 @@ async def get_key(message: types.Message, state: FSMContext):
     await bot.send_message(message.from_user.id, "Укажите название закладки, которую хотите получить!")
     await Fsm.get_key.set()
 
+
 @dp.message_handler(state=Fsm.get_key)
 async def get_key2(message: types.Message, state: FSMContext):
     key = message.text
@@ -408,15 +600,17 @@ async def get_key2(message: types.Message, state: FSMContext):
         return
     try:
         await bot.copy_message(message.chat.id, message.from_user.id, res)
-    except Exception as ex :
-        logger.error(ex)
+    except Exception as ex:
+        # logger.error(ex)
         await bot.send_message(message.from_user.id, btn.get_key_error2)
     await state.finish()
+
 
 @dp.message_handler(commands=['rm'])
 async def get_key(message: types.Message):
     await bot.send_message(message.from_user.id, "Укажите название закладки, которую хотите удалить!")
     await Fsm.rm_key.set()
+
 
 @dp.message_handler(state=Fsm.rm_key)
 async def get_key2(message: types.Message, state: FSMContext):
@@ -427,6 +621,7 @@ async def get_key2(message: types.Message, state: FSMContext):
         return
     await bot.send_message(message.from_user.id, btn.remove_key(key), parse_mode='markdown')
     await state.finish()
+
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
